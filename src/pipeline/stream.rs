@@ -194,12 +194,22 @@ impl StreamTranscriber {
 // Overlap deduplication
 // ---------------------------------------------------------------------------
 
+/// Strip trailing punctuation from a word for comparison purposes.
+/// This allows "way" to match "way." across chunk boundaries.
+fn normalize_word(word: &str) -> &str {
+    word.trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ':' | ';' | '\'' | '"'))
+}
+
 /// Given the full text of the previous chunk and the full text of the current
 /// chunk, return only the portion of `current` that is new (i.e. after the
 /// overlapping region).
 ///
 /// Works at the word level: finds the longest suffix of `prev` that matches
 /// the prefix of `current` and discards that matching prefix from `current`.
+///
+/// Words are compared *without* trailing punctuation so that minor
+/// punctuation inconsistencies across chunk boundaries (e.g. "way" vs
+/// "way.", "dog" vs "dog.") don't cause the dedup to fail.
 fn dedup_overlap(prev: &str, current: &str) -> String {
     if prev.is_empty() || current.is_empty() {
         return current.to_string();
@@ -213,14 +223,19 @@ fn dedup_overlap(prev: &str, current: &str) -> String {
     }
 
     // Find the longest suffix of prev_words that matches the prefix of
-    // curr_words.
+    // curr_words. Words are compared without trailing punctuation so that
+    // "way" matches "way." etc.
     let max_overlap = std::cmp::min(prev_words.len(), curr_words.len());
     let mut best_n = 0usize;
 
     for n in (1..=max_overlap).rev() {
         let prev_tail = &prev_words[prev_words.len() - n..];
         let curr_head = &curr_words[..n];
-        if prev_tail == curr_head {
+        if prev_tail
+            .iter()
+            .zip(curr_head.iter())
+            .all(|(p, c)| normalize_word(p) == normalize_word(c))
+        {
             best_n = n;
             break;
         }
@@ -375,6 +390,41 @@ mod tests {
     fn dedup_single_word() {
         let result = dedup_overlap("hello", "hello world");
         assert_eq!(result, "world");
+    }
+
+    #[test]
+    fn dedup_punctuation_on_prev_last_word() {
+        // Chunk 1 ends with "way." (period) while chunk 2 has "way" (no period).
+        let result = dedup_overlap("dog. Just a fun way.", "dog. Just a fun way to include every letter");
+        assert_eq!(result, "to include every letter");
+    }
+
+    #[test]
+    fn dedup_punctuation_on_curr_first_word() {
+        // Chunk 1 ends with "dog" (no period) while chunk 2 starts with "dog." (period).
+        let result = dedup_overlap("the lazy dog", "dog. Just a fun way");
+        assert_eq!(result, "Just a fun way");
+    }
+
+    #[test]
+    fn dedup_punctuation_mismatch_mid_overlap() {
+        // Punctuation differs somewhere in the middle of the overlap region.
+        let result = dedup_overlap("hello world foo", "world. foo bar");
+        assert_eq!(result, "bar");
+    }
+
+    #[test]
+    fn dedup_punctuation_full_overlap() {
+        // Same words but with different punctuation — should be fully deduplicated.
+        let result = dedup_overlap("hello world.", "hello. world!");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn dedup_normalize_abbreviation() {
+        // Abbreviations like "Dr." should still match "Dr."
+        let result = dedup_overlap("Dr. Smith", "Dr. Smith is here");
+        assert_eq!(result, "is here");
     }
 
     // -----------------------------------------------------------------------
