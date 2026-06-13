@@ -12,6 +12,11 @@ dirs = "6"
 indicatif = "0.17"
 log = "0.4.32"
 env_logger = "0.11.10"
+serde_json = "1.0.150"
+serde = { version = "1.0.228", features = ["derive"] }
+tokenizers = "0.23.1"
+ndarray = "0.17"
+hf-hub = { git = "https://github.com/huggingface/hf-hub/", rev = "4cd6d8acd3192021381ff85210be9192b394e0eb", package = "hf-hub", features = ["blocking"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,2 +1,2 @@
-mod config;
-mod model;
+pub mod config;
+pub mod model;

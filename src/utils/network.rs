@@ -29,7 +29,7 @@ pub mod blocking {
     }
 
     pub fn download_as_bytes(url: &str) -> Result<Vec<u8>> {
-        let mut response = reqwest::blocking::get(url)
+        let response = reqwest::blocking::get(url)
             .context("Failed to send request")?;
         let bytes = response.bytes()?;
         Ok(bytes.to_vec())
