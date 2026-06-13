@@ -9,8 +9,8 @@ use serde::Deserialize;
 use tokenizers::Tokenizer;
 
 const CONFIG_FILENAME: &str = "config.json";
-const DECODER_FILENAME: &str = "onnx/decoder_model_merged.onnx";
-const ENCODER_FILENAME: &str = "onnx/encoder_model.onnx";
+const DECODER_FILENAME: &str = "onnx/decoder_model_merged_int8.onnx";
+const ENCODER_FILENAME: &str = "onnx/encoder_model_int8.onnx";
 const TOKENIZER_FILENAME: &str = "tokenizer.json";
 
 /// Helper: convert ort::Error to anyhow::Error by formatting the debug string.
