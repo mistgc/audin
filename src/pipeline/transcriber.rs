@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use std::io::Read;
 
 use crate::nn::model::moonshine_base::MoonshineBase;
 
@@ -7,9 +6,9 @@ use crate::nn::model::moonshine_base::MoonshineBase;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Streaming transcription configuration.
+/// Transcription configuration.
 #[derive(Debug, Clone)]
-pub struct StreamConfig {
+pub struct TranscribeConfig {
     /// Duration of each processing chunk in milliseconds.
     pub chunk_duration_ms: u64,
     /// Overlap between consecutive chunks in milliseconds.
@@ -19,7 +18,7 @@ pub struct StreamConfig {
     pub sample_rate: u32,
 }
 
-impl Default for StreamConfig {
+impl Default for TranscribeConfig {
     fn default() -> Self {
         Self {
             chunk_duration_ms: 10_000,
@@ -29,7 +28,7 @@ impl Default for StreamConfig {
     }
 }
 
-impl StreamConfig {
+impl TranscribeConfig {
     /// Number of f32 samples per processing chunk.
     pub fn chunk_samples(&self) -> usize {
         (self.sample_rate as u64 * self.chunk_duration_ms / 1000) as usize
@@ -47,10 +46,10 @@ impl StreamConfig {
 }
 
 // ---------------------------------------------------------------------------
-// StreamTranscriber
+// Transcriber
 // ---------------------------------------------------------------------------
 
-/// A stateful streaming transcriber that processes audio chunk-by-chunk.
+/// A stateful transcriber that processes audio chunk-by-chunk.
 ///
 /// Audio is accumulated via [`push_audio`](Self::push_audio). When the
 /// internal buffer has enough samples for one processing chunk, the chunk is
@@ -61,9 +60,9 @@ impl StreamConfig {
 ///
 /// Call [`finalize`](Self::finalize) when no more audio will arrive to flush
 /// any remaining samples.
-pub struct StreamTranscriber {
+pub struct Transcriber {
     model: MoonshineBase,
-    config: StreamConfig,
+    config: TranscribeConfig,
     buffer: Vec<f32>,
     /// Number of samples from the start of `buffer` that have been processed
     /// and are part of a committed (non-overlapping) region.
@@ -75,12 +74,12 @@ pub struct StreamTranscriber {
     finalized: bool,
 }
 
-impl StreamTranscriber {
-    /// Create a new streaming transcriber.
+impl Transcriber {
+    /// Create a new transcriber.
     ///
     /// `model` — an already-loaded MoonshineBase instance.
     /// `config` — chunk size, overlap, sample rate.
-    pub fn new(model: MoonshineBase, config: StreamConfig) -> Self {
+    pub fn new(model: MoonshineBase, config: TranscribeConfig) -> Self {
         Self {
             model,
             config,
@@ -168,8 +167,8 @@ impl StreamTranscriber {
         Ok(self.transcription.clone())
     }
 
-    /// Return the current streaming configuration.
-    pub fn config(&self) -> &StreamConfig {
+    /// Return the current transcription configuration.
+    pub fn config(&self) -> &TranscribeConfig {
         &self.config
     }
 
@@ -179,8 +178,8 @@ impl StreamTranscriber {
         &self.transcription
     }
 
-    /// Reset the streaming state so the transcriber can be reused for a new
-    /// stream (the model is kept loaded).
+    /// Reset the state so the transcriber can be reused for a new audio
+    /// source (the model is kept loaded).
     pub fn reset(&mut self) {
         self.buffer.clear();
         self.processed_up_to = 0;
@@ -253,56 +252,15 @@ fn dedup_overlap(prev: &str, current: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Stdin reader helper
-// ---------------------------------------------------------------------------
-
-/// Read raw 16-bit mono PCM at the given sample rate from `reader` and feed
-/// it into a `StreamTranscriber`. Each chunk of audio read from the stream
-/// is pushed and the interim transcription is printed via `on_interim` as it
-/// becomes available.
-///
-/// The loop exits when `reader` reaches EOF. Call `transcriber.finalize()`
-/// afterwards to flush any remaining audio.
-///
-/// `read_size` is the number of bytes to read per iteration (default: 4096).
-pub fn transcribe_stdin_raw(
-    transcriber: &mut StreamTranscriber,
-    reader: &mut dyn Read,
-    mut on_interim: impl FnMut(&str),
-) -> Result<()> {
-    let mut raw_buf = vec![0u8; 4096];
-    loop {
-        let n = reader
-            .read(&mut raw_buf)
-            .context("failed to read from stdin")?;
-        if n == 0 {
-            break; // EOF
-        }
-
-        // Convert raw 16-bit PCM to f32.
-        let samples: Vec<f32> = raw_buf[..n]
-            .chunks_exact(2)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
-            .collect();
-
-        if let Some(interim) = transcriber.push_audio(&samples)? {
-            on_interim(&interim);
-        }
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // WAV chunked reader helper
 // ---------------------------------------------------------------------------
 
-/// Read a WAV file in chunks and feed PCM data into a `StreamTranscriber`.
+/// Read a WAV file in chunks and feed PCM data into a `Transcriber`.
 ///
 /// This reads the WAV header, then processes the data section chunk-by-chunk.
-/// Interim transcriptions are printed via `on_interim`.
-pub fn transcribe_wav_stream(
-    transcriber: &mut StreamTranscriber,
+/// Interim transcriptions are delivered via `on_interim`.
+pub fn transcribe_wav(
+    transcriber: &mut Transcriber,
     wav_data: &[u8],
     mut on_interim: impl FnMut(&str),
 ) -> Result<()> {
@@ -311,7 +269,7 @@ pub fn transcribe_wav_stream(
 
     if info.bits_per_sample != 16 {
         anyhow::bail!(
-            "only 16-bit PCM is supported for streaming, got {} bits",
+            "only 16-bit PCM is supported, got {} bits",
             info.bits_per_sample
         );
     }
@@ -428,12 +386,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // StreamConfig
+    // TranscribeConfig
     // -----------------------------------------------------------------------
 
     #[test]
     fn config_default_values() {
-        let cfg = StreamConfig::default();
+        let cfg = TranscribeConfig::default();
         assert_eq!(cfg.chunk_duration_ms, 10_000);
         assert_eq!(cfg.overlap_ms, 2_000);
         assert_eq!(cfg.sample_rate, 16_000);
@@ -441,7 +399,7 @@ mod tests {
 
     #[test]
     fn config_sample_counts() {
-        let cfg = StreamConfig {
+        let cfg = TranscribeConfig {
             chunk_duration_ms: 10_000,
             overlap_ms: 2_000,
             sample_rate: 16_000,
@@ -452,7 +410,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // StreamTranscriber (audio-agnostic state tests)
+    // Transcriber (audio-agnostic state tests)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -462,7 +420,7 @@ mod tests {
         // verify the state that doesn't require a real model.
         // This test is a placeholder to ensure the module compiles and
         // the type exists.
-        let cfg = StreamConfig::default();
+        let cfg = TranscribeConfig::default();
         assert_eq!(cfg.chunk_samples(), 160_000);
     }
 }
